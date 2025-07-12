@@ -31,7 +31,11 @@ def is_admin(user_id):
     admins = load_json(ADMIN_FILE)
     return user_id in admins
 
-settings = load_json(SETTINGS_FILE)
+settings_raw = load_json(SETTINGS_FILE)
+settings = {
+    "source_ids": settings_raw.get("source_channels", []),
+    "target_ids": settings_raw.get("target_channels", [])
+}
 replacements = load_json(REPLACE_FILE)
 blocklist = load_json(BLOCKLIST_FILE)
 forward_status = load_json(FORWARD_STATUS_FILE)
