@@ -1,4 +1,11 @@
 {
-  "source_channels": [],
-  "target_channels": []
+  "source_channels": [
+    "-1001234567890",
+    "@mychannel",
+    "t.me/anotherchannel"
+  ],
+  "target_channels": [
+    "@mytarget",
+    "-1009999999999"
+  ]
 }
