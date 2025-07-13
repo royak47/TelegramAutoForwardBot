@@ -9,12 +9,15 @@ load_dotenv()
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 SESSION_STRING = os.getenv("SESSION_STRING")
+
 SETTINGS_FILE = "settings.json"
 REPLACE_FILE = "replacements.json"
 FORWARD_STATUS_FILE = "forward_status.json"
 
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
+
+# Utility Functions
 def load_json(file):
     if not os.path.exists(file):
         return {}
@@ -25,9 +28,18 @@ def is_forwarding_enabled():
     data = load_json(FORWARD_STATUS_FILE)
     return data.get("forwarding", True)
 
-@client.on(events.NewMessage())
-async def handle_new_message(event):
+def match_source(chat_id, username, sources):
+    username = username.lower() if username else ""
+    return (
+        str(chat_id) in sources
+        or f"@{username}" in [c.lower() for c in sources]
+        or f"https://t.me/{username}" in [c.lower() for c in sources]
+    )
+
+# Unified forwarding function (new + edited)
+async def forward_message(event):
     if not is_forwarding_enabled():
+        print("⏸ Forwarding is disabled. Skipping.")
         return
 
     settings = load_json(SETTINGS_FILE)
@@ -36,24 +48,24 @@ async def handle_new_message(event):
     source_channels = settings.get("source_channels", [])
     target_channels = settings.get("target_channels", [])
 
-    # Get unique ID or username
     sender = await event.get_chat()
     chat_id = sender.id
-    username = f"@{getattr(sender, 'username', '')}".lower() if getattr(sender, 'username', None) else None
+    username = getattr(sender, 'username', None)
 
-    if str(chat_id) not in source_channels and username not in [c.lower() for c in source_channels]:
-        return  # not a valid source
+    if not match_source(chat_id, username, source_channels):
+        print(f"⛔ Message skipped (not in source): {username or chat_id}")
+        return
 
     msg = event.message
     text = msg.message or ""
 
-    # Replace words and links
+    # Word & link replacement
     for old, new in replaces.get("words", {}).items():
         text = text.replace(old, new)
     for old, new in replaces.get("links", {}).items():
         text = text.replace(old, new)
 
-    # Forward to all targets
+    # Forwarding logic
     for target in target_channels:
         try:
             await client.send_message(target, message=text, file=msg.media)
@@ -61,7 +73,16 @@ async def handle_new_message(event):
         except Exception as e:
             print(f"❌ Failed to forward to {target}: {e}")
 
-# Start bot
+# Message events
+@client.on(events.NewMessage())
+async def new_message_handler(event):
+    await forward_message(event)
+
+@client.on(events.MessageEdited())
+async def edited_message_handler(event):
+    await forward_message(event)
+
+# Start the client
 print("🤖 Userbot started and listening...")
 client.start()
 client.run_until_disconnected()
