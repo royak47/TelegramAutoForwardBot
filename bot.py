@@ -13,12 +13,12 @@ ADMIN_FILE = "admins.json"
 SETTINGS_FILE = "settings.json"
 REPLACE_FILE = "replacements.json"
 FORWARD_STATUS_FILE = "forward_status.json"
+FILTER_FILE = "filters.json"
 
 bot = TelegramClient("admin_bot", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
-
-# Session memory to hold user input context
 bot._last_action = {}
 
+# Utility Functions
 def is_admin(user_id):
     try:
         with open(ADMIN_FILE) as f:
@@ -43,30 +43,40 @@ def init_files():
         save_json(SETTINGS_FILE, {"source_channels": [], "target_channels": []})
     if not os.path.exists(REPLACE_FILE):
         save_json(REPLACE_FILE, {"words": {}, "links": {}})
+    if not os.path.exists(FILTER_FILE):
+        save_json(FILTER_FILE, {
+            "only_text": False,
+            "only_image": False,
+            "only_video": False,
+            "only_link": False
+        })
 
-# Start command
+def split_buttons(buttons, cols=2):
+    return [buttons[i:i+cols] for i in range(0, len(buttons), cols)]
+
 @bot.on(events.NewMessage(pattern="/start"))
 async def start(event):
     if not is_admin(event.sender_id):
         return
     await event.respond(
-        "🤖 **Bot is active!** Choose an action:",
+        "🤖 **Bot is active! Choose an action:**",
         buttons=[
             [Button.inline("⚙️ Settings", b"settings"), Button.inline("♻️ Reset", b"reset")],
-            [Button.inline("📥 Add Source", b"add_source"), Button.inline("❌ Remove Source", b"remove_source")],
+            [Button.inline("📅 Add Source", b"add_source"), Button.inline("❌ Remove Source", b"remove_source")],
             [Button.inline("📤 Add Target", b"add_target"), Button.inline("❌ Remove Target", b"remove_target")],
-            [Button.inline("✍️ Add Word", b"add_word"), Button.inline("🔗 Add Link", b"add_link")],
+            [Button.inline("📊 Filters", b"filters"), Button.inline("🖍 Edit Word", b"edit_word")],
             [Button.inline("▶️ Start", b"forward"), Button.inline("⏹ Stop", b"stop")]
         ]
     )
 
 @bot.on(events.CallbackQuery)
 async def handle_buttons(event):
-    if not is_admin(event.sender_id):
+    uid = event.sender_id
+    if not is_admin(uid):
         await event.answer("Not authorized.")
         return
+
     data = event.data.decode()
-    uid = event.sender_id
 
     if data == "settings":
         s = load_json(SETTINGS_FILE)
@@ -74,10 +84,9 @@ async def handle_buttons(event):
         w = load_json(REPLACE_FILE)
         text = "📦 **Settings**\n\n"
         text += f"🔄 Forwarding: {'✅ ON' if f.get('forwarding') else '❌ OFF'}\n"
-        text += f"📥 Sources:\n" + "\n".join(s.get("source_channels", [])) or "None"
+        text += f"📅 Sources:\n" + "\n".join(s.get("source_channels", [])) or "None"
         text += f"\n\n📤 Targets:\n" + "\n".join(s.get("target_channels", [])) or "None"
-        text += f"\n\n📝 Word Replacements:\n" + "\n".join([f"`{k}` → `{v}`" for k, v in w.get("words", {}).items()]) or "None"
-        text += f"\n\n🔗 Link Replacements:\n" + "\n".join([f"`{k}` → `{v}`" for k, v in w.get("links", {}).items()]) or "None"
+        text += f"\n\n🖍 Word Replacements:\n" + "\n".join([f"`{k}` → `{v}`" for k, v in w.get("words", {}).items()]) or "None"
         await event.edit(text, parse_mode="markdown")
 
     elif data == "reset":
@@ -93,9 +102,43 @@ async def handle_buttons(event):
         save_json(FORWARD_STATUS_FILE, {"forwarding": False})
         await event.edit("⏹️ Forwarding stopped.")
 
-    elif data in ["add_source", "remove_source", "add_target", "remove_target", "add_word", "add_link"]:
-        bot._last_action[uid] = data
-        await event.respond(f"✍️ Send input for **{data}**\n\n• Channels = `@username`, `-100...`, or `https://t.me/c/ID/msg`\n• Word = `old new`\n• Link = `oldlink newlink`", parse_mode="markdown")
+    elif data == "filters":
+        filters = load_json(FILTER_FILE)
+        await event.edit(
+            "🧰 **Toggle Filters:**",
+            buttons=[
+                [Button.inline(f"🖍 Text: {'✅' if filters.get('only_text') else '❌'}", b"toggle_text"),
+                 Button.inline(f"🖼 Image: {'✅' if filters.get('only_image') else '❌'}", b"toggle_image")],
+                [Button.inline(f"🎥 Video: {'✅' if filters.get('only_video') else '❌'}", b"toggle_video"),
+                 Button.inline(f"🔗 Link: {'✅' if filters.get('only_link') else '❌'}", b"toggle_link")],
+                [Button.inline("⬅️ Back", b"back_to_main")]
+            ]
+        )
+
+    elif data.startswith("toggle_"):
+        filters = load_json(FILTER_FILE)
+        key = "only_" + data.split("_")[1]
+        filters[key] = not filters.get(key, False)
+        save_json(FILTER_FILE, filters)
+        await handle_buttons(await event.edit("Updating..."))
+
+    elif data == "back_to_main":
+        await start(event)
+
+    elif data == "edit_word":
+        words = load_json(REPLACE_FILE).get("words", {})
+        if not words:
+            await event.respond("❗ No words to edit.")
+            return
+        btns = [Button.inline(f"{k} → {v}", f"editw_{k}".encode()) for k, v in words.items()]
+        await event.edit("📝 Choose word to edit:", buttons=split_buttons(btns, 2))
+
+@bot.on(events.CallbackQuery)
+async def handle_edit_word_buttons(event):
+    if event.data.startswith(b"editw_"):
+        old_word = event.data.decode().split("_", 1)[1]
+        bot._last_action[event.sender_id] = f"editword:{old_word}"
+        await event.respond(f"✍️ Send new word to replace `{old_word}`", parse_mode="markdown")
 
 @bot.on(events.NewMessage)
 async def handle_input(event):
@@ -106,50 +149,17 @@ async def handle_input(event):
         return
 
     action = bot._last_action.pop(uid)
-    msg = event.text.strip()
-    settings = load_json(SETTINGS_FILE)
-    replaces = load_json(REPLACE_FILE)
+    text = event.text.strip()
 
-    # Handle source/target input
-    if action in ["add_source", "remove_source", "add_target", "remove_target"]:
-        field = "source_channels" if "source" in action else "target_channels"
-        channels = settings.get(field, [])
-
-        if action.startswith("add_"):
-            if msg not in channels:
-                channels.append(msg)
-                settings[field] = channels
-                save_json(SETTINGS_FILE, settings)
-                await event.reply(f"✅ Added to `{field}`: `{msg}`", parse_mode="markdown")
-            else:
-                await event.reply("⚠️ Already added.")
+    if action.startswith("editword:"):
+        old_word = action.split(":", 1)[1]
+        replaces = load_json(REPLACE_FILE)
+        if old_word in replaces["words"]:
+            replaces["words"][old_word] = text
+            save_json(REPLACE_FILE, replaces)
+            await event.reply(f"✅ Updated replacement:\n`{old_word}` → `{text}`", parse_mode="markdown")
         else:
-            if msg in channels:
-                channels.remove(msg)
-                settings[field] = channels
-                save_json(SETTINGS_FILE, settings)
-                await event.reply(f"❌ Removed from `{field}`: `{msg}`", parse_mode="markdown")
-            else:
-                await event.reply("⚠️ Not found.")
-
-    # Handle word/link replacement
-    elif action == "add_word":
-        try:
-            old, new = msg.split(" ", 1)
-            replaces["words"][old] = new
-            save_json(REPLACE_FILE, replaces)
-            await event.reply(f"📝 Word replace rule added:\n`{old}` → `{new}`", parse_mode="markdown")
-        except:
-            await event.reply("❗ Usage: `old new`", parse_mode="markdown")
-
-    elif action == "add_link":
-        try:
-            old, new = msg.split(" ", 1)
-            replaces["links"][old] = new
-            save_json(REPLACE_FILE, replaces)
-            await event.reply(f"🔗 Link replace rule added:\n`{old}` → `{new}`", parse_mode="markdown")
-        except:
-            await event.reply("❗ Usage: `oldlink newlink`", parse_mode="markdown")
+            await event.reply("⚠️ Original word not found.")
 
 # Init
 init_files()
