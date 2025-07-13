@@ -1,7 +1,7 @@
 import json
 import os
 from dotenv import load_dotenv
-from telethon import TelegramClient, events
+from telethon import TelegramClient, events, Button
 from telethon.sessions import StringSession
 
 load_dotenv()
@@ -18,6 +18,8 @@ BLACKLIST_FILE = "blacklist.json"
 
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
+last_action = {}
+
 # Load json utility
 def load_json(file):
     if not os.path.exists(file):
@@ -25,11 +27,47 @@ def load_json(file):
     with open(file, "r") as f:
         return json.load(f)
 
+def save_json(file, data):
+    with open(file, "w") as f:
+        json.dump(data, f, indent=2)
+
 def is_forwarding_enabled():
     return load_json(FORWARD_STATUS_FILE).get("forwarding", True)
 
+@client.on(events.NewMessage(pattern="/addsource"))
+async def add_source_command(event):
+    last_action[event.sender_id] = "add_source"
+    await event.reply("✍️ Send source @username or channel ID to add:")
+
+@client.on(events.NewMessage(pattern="/addtarget"))
+async def add_target_command(event):
+    last_action[event.sender_id] = "add_target"
+    await event.reply("✍️ Send target @username or channel ID to add:")
+
 @client.on(events.NewMessage())
 async def handle_message(event):
+    uid = event.sender_id
+    text = event.text.strip()
+
+    if uid in last_action:
+        action = last_action.pop(uid)
+        settings = load_json(SETTINGS_FILE)
+        if action == "add_source":
+            if text not in settings.get("source_channels", []):
+                settings.setdefault("source_channels", []).append(text)
+                save_json(SETTINGS_FILE, settings)
+                await event.reply(f"✅ Source added: {text}")
+            else:
+                await event.reply("⚠️ Source already exists.")
+        elif action == "add_target":
+            if text not in settings.get("target_channels", []):
+                settings.setdefault("target_channels", []).append(text)
+                save_json(SETTINGS_FILE, settings)
+                await event.reply(f"✅ Target added: {text}")
+            else:
+                await event.reply("⚠️ Target already exists.")
+        return
+
     if not is_forwarding_enabled():
         return
 
@@ -51,12 +89,10 @@ async def handle_message(event):
     msg = event.message
     text = msg.message or ""
 
-    # Blacklist word filtering
     if any(b in text for b in blacklist):
         print("🚫 Skipped due to blacklist.")
         return
 
-    # Type filters
     if filters.get("only_text") and not msg.text:
         return
     if filters.get("only_image") and not (msg.photo or msg.file and msg.file.mime_type and msg.file.mime_type.startswith("image")):
@@ -66,7 +102,6 @@ async def handle_message(event):
     if filters.get("only_link") and not any(x in text for x in ["http://", "https://"]):
         return
 
-    # Word replacements
     for old, new in replaces.get("words", {}).items():
         text = text.replace(old, new)
     for old, new in replaces.get("links", {}).items():
