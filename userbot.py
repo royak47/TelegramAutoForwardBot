@@ -18,28 +18,47 @@ def load_json(file):
     with open(file, "r") as f:
         return json.load(f)
 
+def normalize_source(source):
+    source = str(source).strip().lower()
+    if source.startswith("https://t.me/"):
+        source = "@" + source.split("/")[-1]
+    elif source.startswith("t.me/"):
+        source = "@" + source.split("/")[-1]
+    return source
+
 @client.on(events.NewMessage())
 async def handler(event):
     settings = load_json(SETTINGS_FILE)
     replaces = load_json(REPLACE_FILE)
-    if event.chat and event.chat.username:
-        if f"@{event.chat.username}" not in settings["source_channels"]:
-            return
+
+    if not event.chat:
+        return
+
+    chat_id = str(event.chat.id).strip()
+    chat_username = f"@{event.chat.username}".lower() if event.chat.username else None
+
+    source_channels = [normalize_source(c) for c in settings["source_channels"]]
+
+    # Check if source matches by ID or @username
+    if chat_id not in source_channels and chat_username not in source_channels:
+        print(f"⚠️ Ignored message from: {chat_id} {chat_username}")
+        return
 
     msg = event.message
-
-    # Replace words and links
     text = msg.message or ""
-    for old, new in replaces["words"].items():
+
+    # Apply replacements
+    for old, new in replaces.get("words", {}).items():
         text = text.replace(old, new)
-    for old, new in replaces["links"].items():
+    for old, new in replaces.get("links", {}).items():
         text = text.replace(old, new)
 
     for target in settings["target_channels"]:
         try:
             await client.send_message(target, file=msg.media, message=text)
+            print(f"✅ Forwarded to {target}")
         except Exception as e:
-            print(f"Failed to forward to {target}: {e}")
+            print(f"❌ Failed to forward to {target}: {e}")
 
 print("📦 Userbot started.")
 client.start()
