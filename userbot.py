@@ -26,34 +26,37 @@ def load_json(file):
 async def handler(event):
     settings = load_json(SETTINGS_FILE)
     replaces = load_json(REPLACE_FILE)
-    blacklist = load_json(BLACKLIST_FILE).get("words", [])
+    blacklist_data = load_json(BLACKLIST_FILE)
+
+    blacklist = blacklist_data.get("words", [])
+    blacklist_enabled = blacklist_data.get("enabled", True)
 
     source_channels = [s.lower() for s in settings.get("source_channels", [])]
     target_channels = settings.get("target_channels", [])
 
-    # Get source ID and username
+    # Get source info
     sender = await event.get_chat()
     chat_id = str(sender.id)
     username = f"@{getattr(sender, 'username', '')}".lower() if getattr(sender, 'username', None) else ""
 
-    # Validate: Must be in allowed source_channels
     if chat_id not in source_channels and username not in source_channels:
-        return  # silently ignore without logging
+        return
 
     msg = event.message
     text = msg.message or ""
 
-    # Blacklist check
-    if any(word.lower() in text.lower() for word in blacklist):
-        return
+    # Remove blacklisted words (don't skip whole msg)
+    if blacklist_enabled:
+        for word in blacklist:
+            text = text.replace(word, "")
 
-    # Replace words and links
+    # Replace words/links
     for old, new in replaces.get("words", {}).items():
         text = text.replace(old, new)
     for old, new in replaces.get("links", {}).items():
         text = text.replace(old, new)
 
-    # Forward to targets
+    # Forward
     for target in target_channels:
         try:
             await client.send_message(target, file=msg.media, message=text)
