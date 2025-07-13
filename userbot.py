@@ -19,7 +19,6 @@ BLACKLIST_FILE = "blacklist.json"
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 last_action = {}
 
-# 📦 JSON Utility
 def load_json(file):
     if not os.path.exists(file):
         return {}
@@ -33,49 +32,11 @@ def save_json(file, data):
 def is_forwarding_enabled():
     return load_json(FORWARD_STATUS_FILE).get("forwarding", True)
 
-# ➕ Add source
-@client.on(events.NewMessage(pattern="/addsource"))
-async def add_source_command(event):
-    last_action[event.sender_id] = "add_source"
-    await event.reply("✍️ Send source @username or channel ID to add:")
-
-# ➕ Add target
-@client.on(events.NewMessage(pattern="/addtarget"))
-async def add_target_command(event):
-    last_action[event.sender_id] = "add_target"
-    await event.reply("✍️ Send target @username or channel ID to add:")
-
-# 🧠 All messages
 @client.on(events.NewMessage())
 async def handle_message(event):
-    uid = event.sender_id
-    text = event.text.strip() if event.text else ""
-
-    if uid in last_action:
-        action = last_action.pop(uid)
-        settings = load_json(SETTINGS_FILE)
-
-        if action == "add_source":
-            if text not in settings.get("source_channels", []):
-                settings.setdefault("source_channels", []).append(text)
-                save_json(SETTINGS_FILE, settings)
-                await event.reply(f"✅ Source added: {text}")
-            else:
-                await event.reply("⚠️ Source already exists.")
-        elif action == "add_target":
-            if text not in settings.get("target_channels", []):
-                settings.setdefault("target_channels", []).append(text)
-                save_json(SETTINGS_FILE, settings)
-                await event.reply(f"✅ Target added: {text}")
-            else:
-                await event.reply("⚠️ Target already exists.")
-        return
-
-    # 🔕 Stop forwarding if disabled
     if not is_forwarding_enabled():
         return
 
-    # 🧾 Load settings
     settings = load_json(SETTINGS_FILE)
     replaces = load_json(REPLACE_FILE)
     filters = load_json(FILTER_FILE)
@@ -84,23 +45,31 @@ async def handle_message(event):
     source_channels = settings.get("source_channels", [])
     target_channels = settings.get("target_channels", [])
 
-    # 🧠 Check if source matched
     sender = await event.get_chat()
     chat_id = str(sender.id)
     username = f"@{getattr(sender, 'username', '')}".lower() if getattr(sender, 'username', None) else None
 
-    if chat_id not in source_channels and (username not in [c.lower() for c in source_channels]):
+    matched = False
+    for src in source_channels:
+        if src.startswith("-100") and str(chat_id) == src:
+            matched = True
+        elif username and src.lower() == username:
+            matched = True
+
+    if not matched:
         return
 
     msg = event.message
     text = msg.text or msg.message or ""
 
-    # 🧹 Blacklist check
+    print(f"📥 New message from {username or chat_id}")
+
+    # Check blacklist
     if any(b.lower() in text.lower() for b in blacklist):
-        print("🚫 Skipped due to blacklist.")
+        print("🚫 Blocked due to blacklist")
         return
 
-    # 📌 Filters
+    # Check filters
     if filters.get("only_text") and not msg.text:
         return
     if filters.get("only_image") and not (msg.photo or (msg.file and msg.file.mime_type and msg.file.mime_type.startswith("image"))):
@@ -110,25 +79,25 @@ async def handle_message(event):
     if filters.get("only_link") and not any(x in text for x in ["http://", "https://"]):
         return
 
-    # 🔁 Replacements
+    # Apply replacements
     for old, new in replaces.get("words", {}).items():
         text = text.replace(old, new)
     for old, new in replaces.get("links", {}).items():
         text = text.replace(old, new)
 
-    # 🎯 Send to all target channels
+    # Send to targets
     for target in target_channels:
         try:
+            print(f"➡️ Forwarding to {target}")
             entity = await client.get_entity(target)
             if msg.media:
                 await client.send_file(entity, file=msg.media, caption=text)
             else:
                 await client.send_message(entity, message=text)
-            print(f"✅ Forwarded to {target}")
+            print(f"✅ Sent to {target}")
         except Exception as e:
-            print(f"❌ Failed to forward to {target}: {e}")
+            print(f"❌ Failed to send to {target}: {e}")
 
-# 🚀 Start client
-print("📦 Userbot started.")
+print("🚀 Userbot running...")
 client.start()
 client.run_until_disconnected()
