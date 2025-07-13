@@ -1,143 +1,141 @@
 import json
 import os
 from dotenv import load_dotenv
-from telethon import TelegramClient, events
+from telethon import TelegramClient, events, Button
 
 load_dotenv()
 
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+
 ADMIN_FILE = "admins.json"
 SETTINGS_FILE = "settings.json"
 REPLACE_FILE = "replacements.json"
 FORWARD_STATUS_FILE = "forward_status.json"
 
-bot = TelegramClient('admin_bot', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
+bot = TelegramClient("admin_bot", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 
+# Utility Functions
 def is_admin(user_id):
-    with open(ADMIN_FILE, "r") as f:
-        admins = json.load(f)
-    return user_id in admins
+    try:
+        with open(ADMIN_FILE) as f:
+            return user_id in json.load(f)
+    except:
+        return False
 
 def save_json(file, data):
     with open(file, "w") as f:
         json.dump(data, f, indent=2)
 
 def load_json(file):
-    with open(file, "r") as f:
+    if not os.path.exists(file):
+        return {}
+    with open(file) as f:
         return json.load(f)
 
 def init_files():
-    # create forward_status.json if not exist
     if not os.path.exists(FORWARD_STATUS_FILE):
         save_json(FORWARD_STATUS_FILE, {"forwarding": True})
+    if not os.path.exists(SETTINGS_FILE):
+        save_json(SETTINGS_FILE, {"source_channels": [], "target_channels": []})
+    if not os.path.exists(REPLACE_FILE):
+        save_json(REPLACE_FILE, {"words": {}, "links": {}})
 
+# /start command with inline buttons
 @bot.on(events.NewMessage(pattern="/start"))
 async def start(event):
     if not is_admin(event.sender_id):
         return
-    await event.reply("✅ Bot is running!")
+    await event.respond(
+        "🤖 **Bot is active!**\nChoose an action below:",
+        buttons=[
+            [Button.inline("⚙️ Settings", b"settings"), Button.inline("♻️ Reset", b"reset")],
+            [Button.inline("📥 Add Source", b"add_source"), Button.inline("❌ Remove Source", b"remove_source")],
+            [Button.inline("📤 Add Target", b"add_target"), Button.inline("❌ Remove Target", b"remove_target")],
+            [Button.inline("▶️ Start Forwarding", b"forward"), Button.inline("⏹ Stop", b"stop")]
+        ]
+    )
 
-@bot.on(events.NewMessage(pattern="/forward"))
-async def forward(event):
+@bot.on(events.CallbackQuery)
+async def callback_handler(event):
     if not is_admin(event.sender_id):
+        await event.answer("Not authorized.")
         return
-    save_json(FORWARD_STATUS_FILE, {"forwarding": True})
-    await event.reply("▶️ Forwarding started.")
+    data = event.data.decode()
 
-@bot.on(events.NewMessage(pattern="/stop"))
-async def stop(event):
-    if not is_admin(event.sender_id):
-        return
-    save_json(FORWARD_STATUS_FILE, {"forwarding": False})
-    await event.reply("⏹️ Forwarding stopped.")
+    if data == "settings":
+        s = load_json(SETTINGS_FILE)
+        f = load_json(FORWARD_STATUS_FILE)
+        text = "📦 **Settings**\n\n"
+        text += f"🔄 Forwarding: {'✅ ON' if f.get('forwarding') else '❌ OFF'}\n"
+        text += f"📥 Sources:\n" + "\n".join(s.get("source_channels", [])) or "None"
+        text += f"\n📤 Targets:\n" + "\n".join(s.get("target_channels", [])) or "None"
+        await event.edit(text)
 
-@bot.on(events.NewMessage(pattern="/settings"))
-async def settings(event):
-    if not is_admin(event.sender_id):
-        return
-    s = load_json(SETTINGS_FILE)
-    f = load_json(FORWARD_STATUS_FILE)
-    status = "✅ ON" if f.get("forwarding") else "❌ OFF"
-    text = f"📦 **Settings**\n\n"
-    text += f"🔄 Forwarding: {status}\n"
-    text += f"📥 Sources: {', '.join(s.get('source_channels', [])) or 'None'}\n"
-    text += f"📤 Targets: {', '.join(s.get('target_channels', [])) or 'None'}"
-    await event.reply(text)
+    elif data == "reset":
+        save_json(SETTINGS_FILE, {"source_channels": [], "target_channels": []})
+        save_json(REPLACE_FILE, {"words": {}, "links": {}})
+        await event.edit("♻️ All settings have been reset.")
 
-@bot.on(events.NewMessage(pattern="/reset"))
-async def reset(event):
-    if not is_admin(event.sender_id):
-        return
-    save_json(SETTINGS_FILE, {"source_channels": [], "target_channels": []})
-    save_json(REPLACE_FILE, {"words": {}, "links": {}})
-    await event.reply("♻️ All settings have been reset.")
+    elif data == "forward":
+        save_json(FORWARD_STATUS_FILE, {"forwarding": True})
+        await event.edit("▶️ Forwarding started.")
 
-@bot.on(events.NewMessage(pattern="/setsource"))
-async def set_source(event):
-    if not is_admin(event.sender_id):
+    elif data == "stop":
+        save_json(FORWARD_STATUS_FILE, {"forwarding": False})
+        await event.edit("⏹️ Forwarding stopped.")
+
+    elif data in ["add_source", "remove_source", "add_target", "remove_target"]:
+        await event.respond(f"✍️ Please send the channel **@username** or **ID** for `{data}`:")
+        bot._last_action[event.sender_id] = data  # temp state storage
+
+# Handle dynamic channel input
+bot._last_action = {}
+
+@bot.on(events.NewMessage)
+async def handle_channel_input(event):
+    uid = event.sender_id
+    if not is_admin(uid):
         return
-    try:
-        channel = event.message.text.split(" ", 1)[1]
-        settings = load_json(SETTINGS_FILE)
+
+    if uid not in bot._last_action:
+        return
+
+    action = bot._last_action.pop(uid)
+    channel = event.text.strip()
+    settings = load_json(SETTINGS_FILE)
+
+    if action == "add_source":
         if channel not in settings["source_channels"]:
             settings["source_channels"].append(channel)
             save_json(SETTINGS_FILE, settings)
-            await event.reply(f"✅ Source channel added: {channel}")
+            await event.reply(f"✅ Source added: {channel}")
         else:
-            await event.reply("⚠️ Source already exists.")
-    except:
-        await event.reply("❗ Usage: /setsource @channelusername")
-
-@bot.on(events.NewMessage(pattern="/removesource"))
-async def remove_source(event):
-    if not is_admin(event.sender_id):
-        return
-    try:
-        channel = event.message.text.split(" ", 1)[1]
-        settings = load_json(SETTINGS_FILE)
+            await event.reply("⚠️ Already in source list.")
+    elif action == "remove_source":
         if channel in settings["source_channels"]:
             settings["source_channels"].remove(channel)
             save_json(SETTINGS_FILE, settings)
             await event.reply(f"❌ Source removed: {channel}")
         else:
-            await event.reply("⚠️ Source not found.")
-    except:
-        await event.reply("❗ Usage: /removesource @channelusername")
-
-@bot.on(events.NewMessage(pattern="/settarget"))
-async def set_target(event):
-    if not is_admin(event.sender_id):
-        return
-    try:
-        channel = event.message.text.split(" ", 1)[1]
-        settings = load_json(SETTINGS_FILE)
+            await event.reply("⚠️ Not found in source list.")
+    elif action == "add_target":
         if channel not in settings["target_channels"]:
             settings["target_channels"].append(channel)
             save_json(SETTINGS_FILE, settings)
-            await event.reply(f"✅ Target channel added: {channel}")
+            await event.reply(f"✅ Target added: {channel}")
         else:
-            await event.reply("⚠️ Target already exists.")
-    except:
-        await event.reply("❗ Usage: /settarget @channelusername")
-
-@bot.on(events.NewMessage(pattern="/removetarget"))
-async def remove_target(event):
-    if not is_admin(event.sender_id):
-        return
-    try:
-        channel = event.message.text.split(" ", 1)[1]
-        settings = load_json(SETTINGS_FILE)
+            await event.reply("⚠️ Already in target list.")
+    elif action == "remove_target":
         if channel in settings["target_channels"]:
             settings["target_channels"].remove(channel)
             save_json(SETTINGS_FILE, settings)
             await event.reply(f"❌ Target removed: {channel}")
         else:
-            await event.reply("⚠️ Target not found.")
-    except:
-        await event.reply("❗ Usage: /removetarget @channelusername")
+            await event.reply("⚠️ Not found in target list.")
 
+# Word/Link replacement commands (same as your version)
 @bot.on(events.NewMessage(pattern="/addword"))
 async def add_word(event):
     if not is_admin(event.sender_id):
@@ -147,7 +145,7 @@ async def add_word(event):
         data = load_json(REPLACE_FILE)
         data["words"][old] = new
         save_json(REPLACE_FILE, data)
-        await event.reply(f"✅ Word replace rule added:\n{old} → {new}")
+        await event.reply(f"📝 Word replace rule:\n`{old}` → `{new}`")
     except:
         await event.reply("❗ Usage: /addword old new")
 
@@ -160,12 +158,11 @@ async def add_link(event):
         data = load_json(REPLACE_FILE)
         data["links"][old] = new
         save_json(REPLACE_FILE, data)
-        await event.reply(f"✅ Link replace rule added:\n{old} → {new}")
+        await event.reply(f"🔗 Link replace rule:\n`{old}` → `{new}`")
     except:
         await event.reply("❗ Usage: /addlink oldlink newlink")
 
-# Initialize on first run
+# Init & Run
 init_files()
-
-print("🤖 Admin bot started.")
+print("✅ Admin Bot Started.")
 bot.run_until_disconnected()
