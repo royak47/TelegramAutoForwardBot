@@ -1,8 +1,10 @@
+# ✅ Full bot.py with all features & clean layout
+# Works on Mobile/PC screen (cleaned + all toggles)
+
 import json
 import os
 from dotenv import load_dotenv
 from telethon import TelegramClient, events, Button
-from telethon.tl.functions.messages import ImportChatInviteRequest
 
 load_dotenv()
 
@@ -11,8 +13,8 @@ API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 bot = TelegramClient("admin_bot", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
-bot._last_action = {}
 
+# File paths
 ADMIN_FILE = "admins.json"
 SETTINGS_FILE = "settings.json"
 REPLACE_FILE = "replacements.json"
@@ -20,182 +22,177 @@ FORWARD_STATUS_FILE = "forward_status.json"
 FILTER_FILE = "filters.json"
 BLACKLIST_FILE = "blacklist.json"
 
+bot._last_action = {}
+
+# Init files
+def init_files():
+    def create(file, default):
+        if not os.path.exists(file):
+            with open(file, "w") as f:
+                json.dump(default, f, indent=2)
+
+    create(ADMIN_FILE, [])
+    create(SETTINGS_FILE, {"source_channels": [], "target_channels": []})
+    create(REPLACE_FILE, {"words": {}, "mentions": {}})
+    create(FORWARD_STATUS_FILE, {"forwarding": True, "blacklist_enabled": True})
+    create(FILTER_FILE, {
+        "only_text": False, "only_image": False,
+        "only_video": False, "only_link": False,
+        "block_mentions": False
+    })
+    create(BLACKLIST_FILE, {"words": []})
+
+# Utils
 
 def save_json(file, data):
     with open(file, "w") as f:
         json.dump(data, f, indent=2)
 
-
 def load_json(file):
-    if not os.path.exists(file):
-        return {}
+    if not os.path.exists(file): return {}
     with open(file) as f:
         return json.load(f)
 
+def is_admin(user_id):
+    return user_id in load_json(ADMIN_FILE)
 
-def normalize(value: str) -> str:
-    value = value.strip()
-    if value.startswith("https://t.me/+") or value.startswith("t.me/+"):
-        return value  # keep full private link
-    if value.startswith("https://t.me/"):
-        return "@" + value.split("/")[-1]
-    elif value.startswith("t.me/"):
-        return "@" + value.split("/")[-1]
-    return value
+def normalize(val):
+    if val.startswith("https://t.me/+"):
+        return val.split("/+", 1)[-1]  # invite hash
+    elif val.startswith("https://t.me/"):
+        return "@" + val.split("/")[-1]
+    elif val.startswith("t.me/"):
+        return "@" + val.split("/")[-1]
+    return val
 
+def split_buttons(buttons, cols=2):
+    return [buttons[i:i+cols] for i in range(0, len(buttons), cols)]
 
-def init_files():
-    if not os.path.exists(ADMIN_FILE):
-        save_json(ADMIN_FILE, [])
-    if not os.path.exists(SETTINGS_FILE):
-        save_json(SETTINGS_FILE, {"source_channels": [], "target_channels": []})
-    if not os.path.exists(REPLACE_FILE):
-        save_json(REPLACE_FILE, {"words": {}, "links": {}, "mentions": {}})
-    if not os.path.exists(FORWARD_STATUS_FILE):
-        save_json(FORWARD_STATUS_FILE, {"forwarding": True})
-    if not os.path.exists(FILTER_FILE):
-        save_json(FILTER_FILE, {
-            "only_text": False,
-            "only_image": False,
-            "only_video": False,
-            "only_link": False,
-            "no_mentions": False
-        })
-    if not os.path.exists(BLACKLIST_FILE):
-        save_json(BLACKLIST_FILE, {"enabled": False, "words": []})
-
-
+# Start message
 @bot.on(events.NewMessage(pattern="/start"))
 async def start(event):
-    if event.sender_id not in load_json(ADMIN_FILE):
-        return
-    await event.respond(
-        "🤖 **Bot Control Panel:**",
-        buttons=[
-            [Button.inline("⚙️ Settings", b"settings"), Button.inline("📄 Filters", b"filters")],
-            [Button.inline("📥 Add Source", b"add_source"), Button.inline("📤 Add Target", b"add_target")],
-            [Button.inline("📝 Replacements", b"edit_words"), Button.inline("🚫 Blacklist", b"blacklist")],
-            [Button.inline("▶️ Start", b"forward"), Button.inline("⏹ Stop", b"stop")],
-        ]
-    )
-
+    if not is_admin(event.sender_id): return
+    await event.respond("🤖 **Bot is active! Choose an action:**", buttons=[
+        [Button.inline("⚙️ Settings", b"settings"), Button.inline("♻️ Reset", b"reset")],
+        [Button.inline("📥 Add Source", b"add_source"), Button.inline("❌ Remove Source", b"remove_source")],
+        [Button.inline("📤 Add Target", b"add_target"), Button.inline("❌ Remove Target", b"remove_target")],
+        [Button.inline("📝 Edit Word", b"edit_word"), Button.inline("✏️ Edit Mentions", b"edit_mentions")],
+        [Button.inline("🚫 Blacklist Words", b"blacklist_words"), Button.inline("🧰 Filters", b"filters")],
+        [Button.inline("▶️ Start", b"forward"), Button.inline("⏹ Stop", b"stop")]
+    ])
 
 @bot.on(events.CallbackQuery)
 async def handle_buttons(event):
-    user_id = event.sender_id
-    if user_id not in load_json(ADMIN_FILE):
-        return await event.answer("Not allowed.")
+    uid = event.sender_id
+    if not is_admin(uid): return await event.answer("Unauthorized")
 
     data = event.data.decode()
+    s = load_json(SETTINGS_FILE)
+    f = load_json(FORWARD_STATUS_FILE)
+    r = load_json(REPLACE_FILE)
+    b = load_json(BLACKLIST_FILE)
+    fl = load_json(FILTER_FILE)
 
     if data == "settings":
-        s = load_json(SETTINGS_FILE)
-        f = load_json(FORWARD_STATUS_FILE)
-        bl = load_json(BLACKLIST_FILE)
-        txt = f"\n🔄 Forwarding: {'ON' if f.get('forwarding') else 'OFF'}"
-        txt += f"\n\n📥 Sources:\n" + "\n".join(s.get("source_channels", []))
-        txt += f"\n\n📤 Targets:\n" + "\n".join(s.get("target_channels", []))
-        txt += f"\n\n🚫 Blacklist: {'ON' if bl.get('enabled') else 'OFF'} ({len(bl.get('words', []))} words)"
-        await event.edit("⚙️ **Current Settings:**\n" + txt, buttons=[[Button.inline("🔙 Back", b"back")]])
+        msg = f"""
+📦 **Settings**
 
-    elif data == "filters":
-        f = load_json(FILTER_FILE)
-        await event.edit(
-            "🧰 **Toggle Filters:**",
-            buttons=[
-                [Button.inline(f"Text: {'✅' if f['only_text'] else '❌'}", b"toggle_text"),
-                 Button.inline(f"Image: {'✅' if f['only_image'] else '❌'}", b"toggle_image")],
-                [Button.inline(f"Video: {'✅' if f['only_video'] else '❌'}", b"toggle_video"),
-                 Button.inline(f"Links: {'✅' if f['only_link'] else '❌'}", b"toggle_link")],
-                [Button.inline(f"No @Mentions: {'✅' if f['no_mentions'] else '❌'}", b"toggle_mentions")],
-                [Button.inline("🔙 Back", b"back")]
-            ]
-        )
+🔄 Forwarding: {'✅' if f['forwarding'] else '❌'}
+🚫 Blacklist: {'✅' if f.get('blacklist_enabled') else '❌'}
 
-    elif data.startswith("toggle_"):
-        key = data.replace("toggle_", "only_") if data != "toggle_mentions" else "no_mentions"
-        f = load_json(FILTER_FILE)
-        f[key] = not f.get(key, False)
-        save_json(FILTER_FILE, f)
-        await event.edit("✅ Filter updated.", buttons=[[Button.inline("🔙 Back", b"filters")]])
+📥 Sources ({len(s['source_channels'])}):\n" + "\n".join(s['source_channels']) + "\n"
+        msg += f"\n📤 Targets ({len(s['target_channels'])}):\n" + "\n".join(s['target_channels']) + "\n"
+        msg += f"\n✏️ Replacements: {len(r['words'])} | Mentions: {len(r['mentions'])}"
+        msg += f"\n🚫 Blacklist: {', '.join(b['words']) or 'None'}"
+        await event.edit(msg, buttons=[[Button.inline("🔙 Back", b"back")]])
 
-    elif data == "add_source":
-        bot._last_action[user_id] = "add_source"
-        await event.respond("✍️ Send source @username or invite link")
-
-    elif data == "add_target":
-        bot._last_action[user_id] = "add_target"
-        await event.respond("✍️ Send target @username or invite link")
-
-    elif data == "edit_words":
-        bot._last_action[user_id] = "edit_word"
-        await event.respond("✍️ Send word pair like `bad|good` or `@old|@new`", parse_mode="markdown")
-
-    elif data == "blacklist":
-        bot._last_action[user_id] = "blacklist"
-        await event.respond("✍️ Send blacklist words separated by comma. First word can be `on` or `off` to toggle.")
+    elif data == "reset":
+        save_json(SETTINGS_FILE, {"source_channels": [], "target_channels": []})
+        save_json(REPLACE_FILE, {"words": {}, "mentions": {}})
+        await event.edit("♻️ Settings reset.", buttons=[[Button.inline("🔙 Back", b"back")]])
 
     elif data == "forward":
-        save_json(FORWARD_STATUS_FILE, {"forwarding": True})
-        await event.edit("▶️ Forwarding started.")
+        f['forwarding'] = True
+        save_json(FORWARD_STATUS_FILE, f)
+        await event.edit("▶️ Forwarding enabled.", buttons=[[Button.inline("🔙 Back", b"back")]])
 
     elif data == "stop":
-        save_json(FORWARD_STATUS_FILE, {"forwarding": False})
-        await event.edit("⏹️ Forwarding stopped.")
+        f['forwarding'] = False
+        save_json(FORWARD_STATUS_FILE, f)
+        await event.edit("⏹️ Forwarding disabled.", buttons=[[Button.inline("🔙 Back", b"back")]])
+
+    elif data == "filters":
+        btns = [
+            Button.inline(f"Text {'✅' if fl['only_text'] else '❌'}", b"toggle_text"),
+            Button.inline(f"Image {'✅' if fl['only_image'] else '❌'}", b"toggle_image"),
+            Button.inline(f"Video {'✅' if fl['only_video'] else '❌'}", b"toggle_video"),
+            Button.inline(f"Link {'✅' if fl['only_link'] else '❌'}", b"toggle_link"),
+            Button.inline(f"@Mentions {'✅' if fl['block_mentions'] else '❌'}", b"toggle_mentions"),
+            Button.inline(f"Blacklist {'✅' if f['blacklist_enabled'] else '❌'}", b"toggle_blacklist")
+        ]
+        await event.edit("🧰 **Toggle Filters**", buttons=split_buttons(btns + [Button.inline("🔙 Back", b"back")], 2))
+
+    elif data.startswith("toggle_"):
+        key = data.split("_")[1]
+        if key == "blacklist":
+            f['blacklist_enabled'] = not f.get('blacklist_enabled', True)
+            save_json(FORWARD_STATUS_FILE, f)
+        else:
+            fl['only_' + key if key != 'mentions' else 'block_mentions'] = not fl.get('only_' + key if key != 'mentions' else 'block_mentions', False)
+            save_json(FILTER_FILE, fl)
+        await handle_buttons(event)
+
+    elif data in ["add_source", "remove_source", "add_target", "remove_target", "blacklist_words"]:
+        bot._last_action[uid] = data
+        await event.respond("✍️ Send input:", buttons=[[Button.inline("🔙 Back", b"back")]])
+
+    elif data in ["edit_word", "edit_mentions"]:
+        bot._last_action[uid] = data
+        await event.respond("✍️ Send in format `from|to` (one per message)", parse_mode="markdown")
 
     elif data == "back":
         await start(event)
 
-
 @bot.on(events.NewMessage)
 async def handler(event):
     uid = event.sender_id
-    if uid not in load_json(ADMIN_FILE):
-        return
-
-    if uid not in bot._last_action:
-        return
+    if not is_admin(uid): return
+    if uid not in bot._last_action: return
 
     action = bot._last_action.pop(uid)
-    txt = event.raw_text.strip()
+    txt = event.text.strip()
 
-    if action in ["add_source", "add_target"]:
-        settings = load_json(SETTINGS_FILE)
+    s = load_json(SETTINGS_FILE)
+    r = load_json(REPLACE_FILE)
+    b = load_json(BLACKLIST_FILE)
+
+    def reply(msg): return event.reply(msg, parse_mode="markdown", buttons=[[Button.inline("🔙 Back", b"back")]])
+
+    if action.startswith("edit_"):
+        if "|" not in txt: return await reply("❗ Format: `from|to`")
+        old, new = map(str.strip, txt.split("|", 1))
+        key = "mentions" if "mentions" in action else "words"
+        r[key][old] = new
+        save_json(REPLACE_FILE, r)
+        return await reply(f"✅ Updated {key}: `{old}` → `{new}`")
+
+    elif action == "blacklist_words":
+        b["words"] = list(set(w.strip() for w in txt.split(",") if w.strip()))
+        save_json(BLACKLIST_FILE, b)
+        return await reply("✅ Blacklist updated.")
+
+    elif action.startswith("add") or action.startswith("remove"):
         key = "source_channels" if "source" in action else "target_channels"
-        norm = normalize(txt)
-        if norm not in settings[key]:
-            settings[key].append(norm)
-            save_json(SETTINGS_FILE, settings)
-            await event.reply(f"✅ Added: `{norm}`", parse_mode="markdown")
+        val = normalize(txt)
+        if "add" in action:
+            if val not in s[key]: s[key].append(val)
+            await reply(f"✅ Added: `{val}`")
         else:
-            await event.reply("⚠️ Already exists.")
+            if val in s[key]: s[key].remove(val)
+            await reply(f"❌ Removed: `{val}`")
+        save_json(SETTINGS_FILE, s)
 
-    elif action == "edit_word":
-        try:
-            old, new = map(str.strip, txt.split("|"))
-            r = load_json(REPLACE_FILE)
-            if old.startswith("@"):
-                r.setdefault("mentions", {})[old] = new
-            else:
-                r.setdefault("words", {})[old] = new
-            save_json(REPLACE_FILE, r)
-            await event.reply(f"✅ Replacement saved: `{old}` → `{new}`", parse_mode="markdown")
-        except:
-            await event.reply("❌ Format error. Use `old|new`.", parse_mode="markdown")
-
-    elif action == "blacklist":
-        bl = load_json(BLACKLIST_FILE)
-        parts = [w.strip() for w in txt.split(",") if w.strip()]
-        if parts and parts[0].lower() in ["on", "off"]:
-            bl["enabled"] = parts[0].lower() == "on"
-            bl["words"] = parts[1:]
-        else:
-            bl["words"] = parts
-        save_json(BLACKLIST_FILE, bl)
-        await event.reply(f"✅ Blacklist updated ({'ON' if bl.get('enabled') else 'OFF'}): {len(bl['words'])} words")
-
-
+# Start bot
 init_files()
 print("✅ Admin Bot running...")
 bot.run_until_disconnected()
-
