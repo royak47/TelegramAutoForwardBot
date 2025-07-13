@@ -1,6 +1,6 @@
 {
-  "only_text": true,
-  "only_image": true,
-  "only_video": true,
-  "only_link": true
+  "only_text": false,
+  "only_image": false,
+  "only_video": false,
+  "only_link": false
 }
