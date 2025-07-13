@@ -19,7 +19,7 @@ BLACKLIST_FILE = "blacklist.json"
 bot = TelegramClient("admin_bot", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 bot._last_action = {}
 
-# Utility Functions
+# Utils
 def is_admin(user_id):
     try:
         with open(ADMIN_FILE) as f:
@@ -36,6 +36,14 @@ def load_json(file):
         return {}
     with open(file) as f:
         return json.load(f)
+
+def normalize(value: str) -> str:
+    value = value.strip()
+    if value.startswith("https://t.me/"):
+        return "@" + value.split("/")[-1]
+    elif value.startswith("t.me/"):
+        return "@" + value.split("/")[-1]
+    return value
 
 def init_files():
     if not os.path.exists(FORWARD_STATUS_FILE):
@@ -57,6 +65,7 @@ def init_files():
 def split_buttons(buttons, cols=2):
     return [buttons[i:i+cols] for i in range(0, len(buttons), cols)]
 
+# Handlers
 @bot.on(events.NewMessage(pattern="/start"))
 async def start(event):
     if not is_admin(event.sender_id):
@@ -140,7 +149,7 @@ async def handle_buttons(event):
 
     elif data in ["add_source", "remove_source", "add_target", "remove_target"]:
         bot._last_action[uid] = data
-        await event.respond(f"✍️ Send @username or channel ID for `{data}`")
+        await event.respond(f"✍️ Send @username or channel ID or link for `{data}`")
 
     elif data == "back_to_main":
         await start(event)
@@ -182,21 +191,22 @@ async def handle_input(event):
 
     elif action in ["add_source", "remove_source", "add_target", "remove_target"]:
         key = "source_channels" if "source" in action else "target_channels"
+        norm = normalize(text)
         if "add" in action:
-            if text not in settings[key]:
-                settings[key].append(text)
-                await event.reply(f"✅ Added: {text}")
+            if norm not in settings[key]:
+                settings[key].append(norm)
+                await event.reply(f"✅ Added: `{norm}`", parse_mode="markdown")
             else:
                 await event.reply("⚠️ Already exists.")
         else:
-            if text in settings[key]:
-                settings[key].remove(text)
-                await event.reply(f"❌ Removed: {text}")
+            if norm in settings[key]:
+                settings[key].remove(norm)
+                await event.reply(f"❌ Removed: `{norm}`", parse_mode="markdown")
             else:
                 await event.reply("⚠️ Not found.")
         save_json(SETTINGS_FILE, settings)
 
-# Init
+# Start
 init_files()
 print("✅ Admin Bot Started.")
 bot.run_until_disconnected()
