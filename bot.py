@@ -47,7 +47,7 @@ def normalize(value: str) -> str:
 
 def init_files():
     if not os.path.exists(FORWARD_STATUS_FILE):
-        save_json(FORWARD_STATUS_FILE, {"forwarding": True})
+        save_json(FORWARD_STATUS_FILE, {"forwarding": True, "blacklist_enabled": True})
     if not os.path.exists(SETTINGS_FILE):
         save_json(SETTINGS_FILE, {"source_channels": [], "target_channels": []})
     if not os.path.exists(REPLACE_FILE):
@@ -60,12 +60,12 @@ def init_files():
             "only_link": False
         })
     if not os.path.exists(BLACKLIST_FILE):
-        save_json(BLACKLIST_FILE, {"enabled": True, "words": []})
+        save_json(BLACKLIST_FILE, {"words": []})
 
 def split_buttons(buttons, cols=2):
     return [buttons[i:i+cols] for i in range(0, len(buttons), cols)]
 
-# Handlers
+# /start
 @bot.on(events.NewMessage(pattern="/start"))
 async def start(event):
     if not is_admin(event.sender_id):
@@ -74,15 +74,13 @@ async def start(event):
         "🤖 **Bot is active! Choose an action:**",
         buttons=[
             [Button.inline("⚙️ Settings", b"settings"), Button.inline("♻️ Reset", b"reset")],
-            [Button.inline("📥 Add Source", b"add_source"), Button.inline("❌ Remove Source", b"remove_source")],
+            [Button.inline("📅 Add Source", b"add_source"), Button.inline("❌ Remove Source", b"remove_source")],
             [Button.inline("📤 Add Target", b"add_target"), Button.inline("❌ Remove Target", b"remove_target")],
-            [Button.inline("🧰 Filters", b"filters"), Button.inline("📝 Edit Word", b"edit_word")],
-            [Button.inline("🚫 Blacklist Words", b"blacklist_words"), Button.inline("🧹 Remove Blacklist", b"remove_blacklist")],
-            [Button.inline("🚫 Blacklist Toggle", b"toggle_blacklist")],
+            [Button.inline("🪰 Filters", b"filters"), Button.inline("📝 Edit Word", b"edit_word")],
+            [Button.inline("🚫 Blacklist Words", b"blacklist_words"), Button.inline("▶️ Toggle Blacklist", b"toggle_blacklist")],
             [Button.inline("▶️ Start", b"forward"), Button.inline("⏹ Stop", b"stop")]
         ]
     )
-    await event.delete()
 
 @bot.on(events.CallbackQuery)
 async def handle_buttons(event):
@@ -98,26 +96,38 @@ async def handle_buttons(event):
         f = load_json(FORWARD_STATUS_FILE)
         w = load_json(REPLACE_FILE)
         b = load_json(BLACKLIST_FILE)
-        text = "📦 **Settings**\n\n"
+        text = "\U0001f4e6 **Settings**\n\n"
         text += f"🔄 Forwarding: {'✅ ON' if f.get('forwarding') else '❌ OFF'}\n"
-        text += f"🚫 Blacklist Enabled: {'✅ ON' if b.get('enabled') else '❌ OFF'}\n"
-        text += f"📥 Sources:\n" + "\n".join(s.get("source_channels", [])) or "None"
+        text += f"🚫 Blacklist: {'✅ ENABLED' if f.get('blacklist_enabled', True) else '❌ DISABLED'}\n"
+        text += f"\n📥 Sources:\n" + "\n".join(s.get("source_channels", [])) or "None"
         text += f"\n\n📤 Targets:\n" + "\n".join(s.get("target_channels", [])) or "None"
-        text += f"\n\n📝 Word Replacements:\n" + "\n".join([f"`{k}` → `{v}`" for k, v in w.get("words", {}).items()]) or "None"
+        text += f"\n\n📝 Replacements:\n" + "\n".join([f"`{k}` → `{v}`" for k, v in w.get("words", {}).items()]) or "None"
+        text += f"\n\n🚫 Blacklist Words:\n" + ", ".join(b.get("words", [])) or "None"
         await event.edit(text, parse_mode="markdown", buttons=[[Button.inline("🔙 Back", b"back_to_main")]])
 
     elif data == "reset":
         save_json(SETTINGS_FILE, {"source_channels": [], "target_channels": []})
         save_json(REPLACE_FILE, {"words": {}, "links": {}})
+        save_json(BLACKLIST_FILE, {"words": []})
         await event.edit("♻️ All settings have been reset.", buttons=[[Button.inline("🔙 Back", b"back_to_main")]])
 
     elif data == "forward":
-        save_json(FORWARD_STATUS_FILE, {"forwarding": True})
+        status = load_json(FORWARD_STATUS_FILE)
+        status["forwarding"] = True
+        save_json(FORWARD_STATUS_FILE, status)
         await event.edit("▶️ Forwarding started.", buttons=[[Button.inline("🔙 Back", b"back_to_main")]])
 
     elif data == "stop":
-        save_json(FORWARD_STATUS_FILE, {"forwarding": False})
+        status = load_json(FORWARD_STATUS_FILE)
+        status["forwarding"] = False
+        save_json(FORWARD_STATUS_FILE, status)
         await event.edit("⏹️ Forwarding stopped.", buttons=[[Button.inline("🔙 Back", b"back_to_main")]])
+
+    elif data == "toggle_blacklist":
+        status = load_json(FORWARD_STATUS_FILE)
+        status["blacklist_enabled"] = not status.get("blacklist_enabled", True)
+        save_json(FORWARD_STATUS_FILE, status)
+        await event.edit("✅ Blacklist toggled.", buttons=[[Button.inline("🔙 Back", b"back_to_main")]])
 
     elif data == "filters":
         filters = load_json(FILTER_FILE)
@@ -132,12 +142,6 @@ async def handle_buttons(event):
             ]
         )
 
-    elif data == "toggle_blacklist":
-        bl = load_json(BLACKLIST_FILE)
-        bl["enabled"] = not bl.get("enabled", True)
-        save_json(BLACKLIST_FILE, bl)
-        await event.edit(f"🚫 Blacklist {'enabled' if bl['enabled'] else 'disabled'}.", buttons=[[Button.inline("🔙 Back", b"back_to_main")]])
-
     elif data.startswith("toggle_"):
         filters = load_json(FILTER_FILE)
         key = "only_" + data.split("_")[1]
@@ -146,20 +150,12 @@ async def handle_buttons(event):
         await handle_buttons(await event.edit("Updating..."))
 
     elif data == "edit_word":
-        words = load_json(REPLACE_FILE).get("words", {})
-        if not words:
-            await event.respond("❗ No words to edit.")
-            return
-        btns = [Button.inline(f"{k} → {v}", f"editw_{k}".encode()) for k, v in words.items()]
-        await event.edit("📝 Choose word to edit:", buttons=split_buttons(btns + [Button.inline("🔙 Back", b"back_to_main")], 2))
+        bot._last_action[uid] = "editword"
+        await event.respond("✍️ Send replacements in `old → new` format, one per line")
 
     elif data == "blacklist_words":
         bot._last_action[uid] = "blacklist"
-        await event.respond("✍️ Send words (comma-separated) to blacklist (won’t forward if present)")
-
-    elif data == "remove_blacklist":
-        bot._last_action[uid] = "remove_blacklist"
-        await event.respond("✍️ Send words (comma-separated) to remove from blacklist")
+        await event.respond("✍️ Send blacklist words (comma-separated). To remove, resend without word.")
 
     elif data in ["add_source", "remove_source", "add_target", "remove_target"]:
         bot._last_action[uid] = data
@@ -167,13 +163,6 @@ async def handle_buttons(event):
 
     elif data == "back_to_main":
         await start(event)
-
-@bot.on(events.CallbackQuery)
-async def handle_edit_word_buttons(event):
-    if event.data.startswith(b"editw_"):
-        old_word = event.data.decode().split("_", 1)[1]
-        bot._last_action[event.sender_id] = f"editword:{old_word}"
-        await event.respond(f"✍️ Send new word to replace `{old_word}`", parse_mode="markdown")
 
 @bot.on(events.NewMessage)
 async def handle_input(event):
@@ -188,29 +177,19 @@ async def handle_input(event):
     text = event.text.strip()
     settings = load_json(SETTINGS_FILE)
 
-    if action.startswith("editword:"):
-        old_word = action.split(":", 1)[1]
-        replaces = load_json(REPLACE_FILE)
-        if old_word in replaces["words"]:
-            replaces["words"][old_word] = text
-            save_json(REPLACE_FILE, replaces)
-            await event.reply(f"✅ Updated replacement:\n`{old_word}` → `{text}`", parse_mode="markdown")
-        else:
-            await event.reply("⚠️ Original word not found.")
+    if action == "editword":
+        replaces = {"words": {}, "links": {}}
+        for line in text.split("\n"):
+            if "→" in line:
+                old, new = map(str.strip, line.split("→"))
+                replaces["words"][old] = new
+        save_json(REPLACE_FILE, replaces)
+        await event.reply("✅ Replacements updated.")
 
     elif action == "blacklist":
-        bl = load_json(BLACKLIST_FILE)
-        new_words = [w.strip() for w in text.split(",") if w.strip()]
-        bl["words"] = list(set(bl.get("words", []) + new_words))
-        save_json(BLACKLIST_FILE, bl)
-        await event.reply(f"✅ Blacklist updated: {', '.join(new_words)}")
-
-    elif action == "remove_blacklist":
-        bl = load_json(BLACKLIST_FILE)
-        remove_words = [w.strip() for w in text.split(",") if w.strip()]
-        bl["words"] = [w for w in bl.get("words", []) if w not in remove_words]
-        save_json(BLACKLIST_FILE, bl)
-        await event.reply(f"✅ Removed from blacklist: {', '.join(remove_words)}")
+        words = [w.strip() for w in text.split(",") if w.strip()]
+        save_json(BLACKLIST_FILE, {"words": words})
+        await event.reply(f"✅ Blacklist updated: {', '.join(words)}")
 
     elif action in ["add_source", "remove_source", "add_target", "remove_target"]:
         key = "source_channels" if "source" in action else "target_channels"
@@ -233,4 +212,3 @@ async def handle_input(event):
 init_files()
 print("✅ Admin Bot Started.")
 bot.run_until_disconnected()
-
