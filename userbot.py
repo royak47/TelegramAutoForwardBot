@@ -28,14 +28,22 @@ async def handler(event):
     replaces = load_json(REPLACE_FILE)
     blacklist = load_json(BLACKLIST_FILE).get("words", [])
 
-    if event.chat and event.chat.username:
-        if f"@{event.chat.username}".lower() not in [c.lower() for c in settings["source_channels"]]:
-            return
+    source_channels = [s.lower() for s in settings.get("source_channels", [])]
+    target_channels = settings.get("target_channels", [])
+
+    # Get source ID and username
+    sender = await event.get_chat()
+    chat_id = str(sender.id)
+    username = f"@{getattr(sender, 'username', '')}".lower() if getattr(sender, 'username', None) else ""
+
+    # Validate: Must be in allowed source_channels
+    if chat_id not in source_channels and username not in source_channels:
+        return  # silently ignore without logging
 
     msg = event.message
     text = msg.message or ""
 
-    # Blacklist filtering
+    # Blacklist check
     if any(word.lower() in text.lower() for word in blacklist):
         return
 
@@ -45,14 +53,14 @@ async def handler(event):
     for old, new in replaces.get("links", {}).items():
         text = text.replace(old, new)
 
-    # Send to all targets
-    for target in settings["target_channels"]:
+    # Forward to targets
+    for target in target_channels:
         try:
             await client.send_message(target, file=msg.media, message=text)
             print(f"✅ Forwarded to {target}")
         except Exception as e:
             print(f"❌ Failed to forward to {target}: {e}")
 
-print("📦 Userbot started.")
+print("🚀 Userbot started.")
 client.start()
 client.run_until_disconnected()
