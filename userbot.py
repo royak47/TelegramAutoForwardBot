@@ -11,36 +11,57 @@ API_HASH = os.getenv("API_HASH")
 SESSION_STRING = os.getenv("SESSION_STRING")
 SETTINGS_FILE = "settings.json"
 REPLACE_FILE = "replacements.json"
+FORWARD_STATUS_FILE = "forward_status.json"
 
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
 def load_json(file):
+    if not os.path.exists(file):
+        return {}
     with open(file, "r") as f:
         return json.load(f)
 
+def is_forwarding_enabled():
+    data = load_json(FORWARD_STATUS_FILE)
+    return data.get("forwarding", True)
+
 @client.on(events.NewMessage())
-async def handler(event):
+async def handle_new_message(event):
+    if not is_forwarding_enabled():
+        return
+
     settings = load_json(SETTINGS_FILE)
     replaces = load_json(REPLACE_FILE)
-    if event.chat and event.chat.username:
-        if f"@{event.chat.username}" not in settings["source_channels"]:
-            return
+
+    source_channels = settings.get("source_channels", [])
+    target_channels = settings.get("target_channels", [])
+
+    # Get unique ID or username
+    sender = await event.get_chat()
+    chat_id = sender.id
+    username = f"@{getattr(sender, 'username', '')}".lower() if getattr(sender, 'username', None) else None
+
+    if str(chat_id) not in source_channels and username not in [c.lower() for c in source_channels]:
+        return  # not a valid source
 
     msg = event.message
+    text = msg.message or ""
 
     # Replace words and links
-    text = msg.message or ""
-    for old, new in replaces["words"].items():
+    for old, new in replaces.get("words", {}).items():
         text = text.replace(old, new)
-    for old, new in replaces["links"].items():
+    for old, new in replaces.get("links", {}).items():
         text = text.replace(old, new)
 
-    for target in settings["target_channels"]:
+    # Forward to all targets
+    for target in target_channels:
         try:
-            await client.send_message(target, file=msg.media, message=text)
+            await client.send_message(target, message=text, file=msg.media)
+            print(f"✅ Forwarded to {target}")
         except Exception as e:
-            print(f"Failed to forward to {target}: {e}")
+            print(f"❌ Failed to forward to {target}: {e}")
 
-print("📦 Userbot started.")
+# Start bot
+print("🤖 Userbot started and listening...")
 client.start()
 client.run_until_disconnected()
