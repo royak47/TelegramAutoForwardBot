@@ -70,7 +70,6 @@ def split_buttons(buttons, cols=2):
 async def start(event):
     if not is_admin(event.sender_id):
         return
-    await event.delete()
     await event.respond(
         "🤖 **Bot is active! Choose an action:**",
         buttons=[
@@ -78,10 +77,12 @@ async def start(event):
             [Button.inline("📥 Add Source", b"add_source"), Button.inline("❌ Remove Source", b"remove_source")],
             [Button.inline("📤 Add Target", b"add_target"), Button.inline("❌ Remove Target", b"remove_target")],
             [Button.inline("🧰 Filters", b"filters"), Button.inline("📝 Edit Word", b"edit_word")],
-            [Button.inline("🚫 Blacklist Words", b"blacklist_words"), Button.inline("🟢 Toggle Blacklist", b"toggle_blacklist")],
+            [Button.inline("🚫 Blacklist Words", b"blacklist_words"), Button.inline("🧹 Remove Blacklist", b"remove_blacklist")],
+            [Button.inline("🚫 Blacklist Toggle", b"toggle_blacklist")],
             [Button.inline("▶️ Start", b"forward"), Button.inline("⏹ Stop", b"stop")]
         ]
     )
+    await event.delete()
 
 @bot.on(events.CallbackQuery)
 async def handle_buttons(event):
@@ -99,7 +100,7 @@ async def handle_buttons(event):
         b = load_json(BLACKLIST_FILE)
         text = "📦 **Settings**\n\n"
         text += f"🔄 Forwarding: {'✅ ON' if f.get('forwarding') else '❌ OFF'}\n"
-        text += f"🚫 Blacklist Enabled: {'✅' if b.get('enabled') else '❌'}\n"
+        text += f"🚫 Blacklist Enabled: {'✅ ON' if b.get('enabled') else '❌ OFF'}\n"
         text += f"📥 Sources:\n" + "\n".join(s.get("source_channels", [])) or "None"
         text += f"\n\n📤 Targets:\n" + "\n".join(s.get("target_channels", [])) or "None"
         text += f"\n\n📝 Word Replacements:\n" + "\n".join([f"`{k}` → `{v}`" for k, v in w.get("words", {}).items()]) or "None"
@@ -118,12 +119,6 @@ async def handle_buttons(event):
         save_json(FORWARD_STATUS_FILE, {"forwarding": False})
         await event.edit("⏹️ Forwarding stopped.", buttons=[[Button.inline("🔙 Back", b"back_to_main")]])
 
-    elif data == "toggle_blacklist":
-        bl = load_json(BLACKLIST_FILE)
-        bl["enabled"] = not bl.get("enabled", True)
-        save_json(BLACKLIST_FILE, bl)
-        await event.edit(f"🚫 Blacklist is now {'✅ Enabled' if bl['enabled'] else '❌ Disabled'}.", buttons=[[Button.inline("🔙 Back", b"back_to_main")]])
-
     elif data == "filters":
         filters = load_json(FILTER_FILE)
         await event.edit(
@@ -136,6 +131,12 @@ async def handle_buttons(event):
                 [Button.inline("🔙 Back", b"back_to_main")]
             ]
         )
+
+    elif data == "toggle_blacklist":
+        bl = load_json(BLACKLIST_FILE)
+        bl["enabled"] = not bl.get("enabled", True)
+        save_json(BLACKLIST_FILE, bl)
+        await event.edit(f"🚫 Blacklist {'enabled' if bl['enabled'] else 'disabled'}.", buttons=[[Button.inline("🔙 Back", b"back_to_main")]])
 
     elif data.startswith("toggle_"):
         filters = load_json(FILTER_FILE)
@@ -154,7 +155,11 @@ async def handle_buttons(event):
 
     elif data == "blacklist_words":
         bot._last_action[uid] = "blacklist"
-        await event.respond("✍️ Send words (comma-separated) to blacklist")
+        await event.respond("✍️ Send words (comma-separated) to blacklist (won’t forward if present)")
+
+    elif data == "remove_blacklist":
+        bot._last_action[uid] = "remove_blacklist"
+        await event.respond("✍️ Send words (comma-separated) to remove from blacklist")
 
     elif data in ["add_source", "remove_source", "add_target", "remove_target"]:
         bot._last_action[uid] = data
@@ -195,9 +200,17 @@ async def handle_input(event):
 
     elif action == "blacklist":
         bl = load_json(BLACKLIST_FILE)
-        bl["words"] = [w.strip() for w in text.split(",") if w.strip()]
+        new_words = [w.strip() for w in text.split(",") if w.strip()]
+        bl["words"] = list(set(bl.get("words", []) + new_words))
         save_json(BLACKLIST_FILE, bl)
-        await event.reply(f"✅ Blacklist updated: {', '.join(bl['words'])}")
+        await event.reply(f"✅ Blacklist updated: {', '.join(new_words)}")
+
+    elif action == "remove_blacklist":
+        bl = load_json(BLACKLIST_FILE)
+        remove_words = [w.strip() for w in text.split(",") if w.strip()]
+        bl["words"] = [w for w in bl.get("words", []) if w not in remove_words]
+        save_json(BLACKLIST_FILE, bl)
+        await event.reply(f"✅ Removed from blacklist: {', '.join(remove_words)}")
 
     elif action in ["add_source", "remove_source", "add_target", "remove_target"]:
         key = "source_channels" if "source" in action else "target_channels"
@@ -220,3 +233,4 @@ async def handle_input(event):
 init_files()
 print("✅ Admin Bot Started.")
 bot.run_until_disconnected()
+
