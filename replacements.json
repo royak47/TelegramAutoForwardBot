@@ -1,4 +1,8 @@
 {
-  "words": {},
-  "links": {}
+  "words": {
+    "oldword": "newword"
+  },
+  "links": {
+    "https://oldlink.com": "https://newlink.com"
+  }
 }
