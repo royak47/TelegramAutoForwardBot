@@ -54,7 +54,7 @@ def normalize(value):
 def init_files():
     if not os.path.exists(ADMIN_FILE): save_json(ADMIN_FILE, [])
     if not os.path.exists(FORWARD_STATUS_FILE): save_json(FORWARD_STATUS_FILE, {"forwarding": True})
-    if not os.path.exists(SETTINGS_FILE): save_json(SETTINGS_FILE, {"source_channels": [], "target_channels": []})
+    if not os.path.exists(SETTINGS_FILE): save_json(SETTINGS_FILE, {"pairs": []})
     if not os.path.exists(REPLACE_FILE): save_json(REPLACE_FILE, {"words": {}, "mentions": {}})
     if not os.path.exists(FILTER_FILE): save_json(FILTER_FILE, {
         "only_text": False,
@@ -68,8 +68,7 @@ def init_files():
 def main_buttons():
     return [
         [Button.inline("⚙️ Settings", b"settings"), Button.inline("♻️ Reset", b"reset")],
-        [Button.inline("📥 Add Source", b"add_source"), Button.inline("❌ Remove Source", b"remove_source")],
-        [Button.inline("📤 Add Target", b"add_target"), Button.inline("❌ Remove Target", b"remove_target")],
+        [Button.inline("➕ Add Pair", b"add_pair"), Button.inline("➖ Remove Pair", b"remove_pair")],
         [Button.inline("🧰 Filters", b"filters"), Button.inline("📝 Edit Words", b"edit_words")],
         [Button.inline("🚫 Blacklist", b"blacklist_menu")],
         [Button.inline("▶️ Start", b"forward"), Button.inline("⏹ Stop", b"stop")]
@@ -99,13 +98,12 @@ async def handle_buttons(event):
         msg += f"🔄 Forwarding: {'✅ ON' if f.get('forwarding') else '❌ OFF'}\n"
         msg += f"🚫 Blacklist: {'✅ ON' if bl.get('enabled') else '❌ OFF'}\n"
         msg += f"🙅 Block Mentions: {'✅' if filters.get('block_mentions') else '❌'}\n"
-        msg += "\n📥 **Sources**:\n" + ("\n".join(s.get("source_channels", [])) or "None")
-        msg += "\n\n📤 **Targets**:\n" + ("\n".join(s.get("target_channels", [])) or "None")
+        msg += "\n🔗 **Source → Target Pairs**:\n" + ("\n".join([f"{p['source']} → {p['target']}" for p in s.get("pairs", [])]) or "None")
         msg += "\n\n✏️ Replacements:\n" + ("\n".join([f"{k} ➔ {v}" for k,v in replaces.get("words", {}).items()]) or "None")
         await event.edit(msg, parse_mode="markdown", buttons=[[Button.inline("🔙 Back", b"back")]])
 
     elif data == "reset":
-        save_json(SETTINGS_FILE, {"source_channels": [], "target_channels": []})
+        save_json(SETTINGS_FILE, {"pairs": []})
         save_json(REPLACE_FILE, {"words": {}, "mentions": {}})
         await event.edit("♻️ Reset done!", buttons=[[Button.inline("🔙 Back", b"back")]])
 
@@ -167,9 +165,9 @@ async def handle_buttons(event):
         save_json(BLACKLIST_FILE, {"words": [], "enabled": False})
         await event.edit("✅ Blacklist cleared.", buttons=[[Button.inline("🔙 Back", b"blacklist_menu")]])
 
-    elif data in ["add_source", "remove_source", "add_target", "remove_target"]:
+    elif data in ["add_pair", "remove_pair"]:
         bot._last_action[uid] = data
-        await event.respond(f"✍️ Send @username, ID, or full t.me link for `{data}`")
+        await event.respond("✍️ Send source and target like: `source|target`")
 
     elif data == "back":
         await event.edit("🔙 Main Menu:", buttons=main_buttons())
@@ -184,22 +182,26 @@ async def handler(event):
     text = event.raw_text.strip()
     settings = load_json(SETTINGS_FILE)
 
-    if action in ["add_source", "remove_source", "add_target", "remove_target"]:
-        key = "source_channels" if "source" in action else "target_channels"
-        val = normalize(text)
-        if "add" in action:
-            if val not in settings[key]:
-                settings[key].append(val)
-                await event.reply(f"✅ Added: `{val}`", parse_mode="markdown")
+    if action in ["add_pair", "remove_pair"]:
+        if "|" not in text:
+            return await event.reply("⚠️ Use format: `source|target`")
+        source, target = map(normalize, text.split("|", 1))
+        pairs = settings.get("pairs", [])
+
+        if action == "add_pair":
+            if {"source": source, "target": target} not in pairs:
+                pairs.append({"source": source, "target": target})
+                await event.reply(f"✅ Added pair: `{source}` → `{target}`", parse_mode="markdown")
             else:
                 await event.reply("⚠️ Already exists.")
         else:
-            if val in settings[key]:
-                settings[key].remove(val)
-                await event.reply(f"❌ Removed: `{val}`", parse_mode="markdown")
+            if {"source": source, "target": target} in pairs:
+                pairs.remove({"source": source, "target": target})
+                await event.reply(f"❌ Removed pair: `{source}` → `{target}`", parse_mode="markdown")
             else:
                 await event.reply("⚠️ Not found.")
-        save_json(SETTINGS_FILE, settings)
+
+        save_json(SETTINGS_FILE, {"pairs": pairs})
 
     elif action == "edit_words":
         if "|" not in text:
