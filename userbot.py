@@ -17,7 +17,7 @@ FILTER_FILE = "filters.json"
 
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
-# ---------- UTILITIES ----------
+# ------------------- Utilities -------------------
 
 def load_json(file):
     if not os.path.exists(file):
@@ -25,7 +25,25 @@ def load_json(file):
     with open(file, "r") as f:
         return json.load(f)
 
-# ---------- HANDLER ----------
+def normalize_source(val):
+    val = val.strip()
+    if val.startswith("https://t.me/+"):
+        return val  # full private invite
+    elif val.startswith("https://t.me/"):
+        return "@" + val.split("/")[-1]
+    elif val.startswith("t.me/+"):
+        return "https://" + val
+    elif val.startswith("t.me/"):
+        return "@" + val.split("/")[-1]
+    return val
+
+def match_source(sender):
+    chat_id = str(sender.id)
+    username = f"@{getattr(sender, 'username', '')}".lower() if getattr(sender, 'username', None) else ""
+    invite_link = getattr(sender, 'exported_invite', None)
+    return [chat_id, username, invite_link]
+
+# ------------------- Handler -------------------
 
 @client.on(events.NewMessage())
 async def handler(event):
@@ -34,46 +52,48 @@ async def handler(event):
     blacklist_data = load_json(BLACKLIST_FILE)
     filters = load_json(FILTER_FILE)
 
+    pairs = settings.get("pairs", [])
     sender = await event.get_chat()
-    sender_id = str(sender.id)
-    sender_username = f"@{getattr(sender, 'username', '')}".lower() if getattr(sender, 'username', None) else ""
-    sender_invite = getattr(sender, 'invite_hash', None)
-    sender_inputs = [sender_id, sender_username, sender_invite]
+    sources = match_source(sender)
 
-    # Find matching targets for this source
     matched_targets = []
-    for pair in settings.get("pairs", []):
-        if pair["source"] in sender_inputs:
+    for pair in pairs:
+        norm_source = normalize_source(pair["source"])
+        if norm_source in sources:
             matched_targets.append(pair["target"])
 
     if not matched_targets:
-        return  # no valid source → skip
+        return
 
     msg = event.message
     text = msg.message or ""
 
-    # Filters
+    # Filter: block @mentions
     if filters.get("block_mentions") and "@" in text:
         return
 
-    if blacklist_data.get("enabled"):
-        for word in blacklist_data.get("words", []):
-            text = text.replace(word, "")
-
-    for old, new in replaces.get("words", {}).items():
-        text = text.replace(old, new)
-    for old, new in replaces.get("mentions", {}).items():
-        text = text.replace(old, new)
-
+    # Filter types
     if filters.get("only_text") and not msg.media:
         pass
     elif filters.get("only_image") and not msg.photo:
         return
     elif filters.get("only_video") and not msg.video:
         return
-    elif filters.get("only_link") and ("http" not in text and "www" not in text):
+    elif filters.get("only_link") and not ("http" in text or "www" in text):
         return
 
+    # Blacklist (remove words, not block full msg)
+    if blacklist_data.get("enabled"):
+        for word in blacklist_data.get("words", []):
+            text = text.replace(word, "")
+
+    # Replacements
+    for old, new in replaces.get("words", {}).items():
+        text = text.replace(old, new)
+    for old, new in replaces.get("mentions", {}).items():
+        text = text.replace(old, new)
+
+    # Forward to matched targets
     for target in matched_targets:
         try:
             await client.send_message(target, file=msg.media, message=text)
@@ -81,7 +101,7 @@ async def handler(event):
         except Exception as e:
             print(f"❌ Failed to forward to {target}: {e}")
 
-# ---------- START ----------
+# ------------------- Start -------------------
 
 print("🚀 Userbot started.")
 client.start()
