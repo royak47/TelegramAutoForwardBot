@@ -42,9 +42,11 @@ def load_json(file):
 def normalize(value):
     value = value.strip()
     if value.startswith("https://t.me/+"):
-        return value.split("/")[-1]
+        return value  # full invite link
     elif value.startswith("https://t.me/"):
         return "@" + value.split("/")[-1]
+    elif value.startswith("t.me/+"):
+        return "https://" + value
     elif value.startswith("t.me/"):
         return "@" + value.split("/")[-1]
     return value
@@ -97,9 +99,9 @@ async def handle_buttons(event):
         msg += f"🔄 Forwarding: {'✅ ON' if f.get('forwarding') else '❌ OFF'}\n"
         msg += f"🚫 Blacklist: {'✅ ON' if bl.get('enabled') else '❌ OFF'}\n"
         msg += f"🙅 Block Mentions: {'✅' if filters.get('block_mentions') else '❌'}\n"
-        msg += "\n📥 **Sources**:\n" + "\n".join(s.get("source_channels", [])) or "None"
-        msg += "\n\n📤 **Targets**:\n" + "\n".join(s.get("target_channels", [])) or "None"
-        msg += "\n\n✏️ Replacements:\n" + "\n".join([f"{k} ➔ {v}" for k,v in replaces.get("words", {}).items()])
+        msg += "\n📥 **Sources**:\n" + ("\n".join(s.get("source_channels", [])) or "None")
+        msg += "\n\n📤 **Targets**:\n" + ("\n".join(s.get("target_channels", [])) or "None")
+        msg += "\n\n✏️ Replacements:\n" + ("\n".join([f"{k} ➔ {v}" for k,v in replaces.get("words", {}).items()]) or "None")
         await event.edit(msg, parse_mode="markdown", buttons=[[Button.inline("🔙 Back", b"back")]])
 
     elif data == "reset":
@@ -167,7 +169,7 @@ async def handle_buttons(event):
 
     elif data in ["add_source", "remove_source", "add_target", "remove_target"]:
         bot._last_action[uid] = data
-        await event.respond(f"✍️ Send @username, ID, or t.me link for `{data}`")
+        await event.respond(f"✍️ Send @username, ID, or full t.me link for `{data}`")
 
     elif data == "back":
         await event.edit("🔙 Main Menu:", buttons=main_buttons())
