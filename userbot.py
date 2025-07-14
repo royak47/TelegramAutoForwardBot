@@ -25,25 +25,6 @@ def load_json(file):
     with open(file, "r") as f:
         return json.load(f)
 
-def normalize(value):
-    value = value.strip()
-    if value.startswith("https://t.me/+"):
-        return value  # full invite
-    elif value.startswith("https://t.me/"):
-        return "@" + value.split("/")[-1]
-    elif value.startswith("t.me/+"):
-        return "https://" + value
-    elif value.startswith("t.me/"):
-        return "@" + value.split("/")[-1]
-    return value
-
-def match_source(sender):
-    chat_id = str(sender.id)
-    username = f"@{getattr(sender, 'username', '')}".lower() if getattr(sender, 'username', None) else ""
-    invite = getattr(sender, 'invite_hash', None)
-    all_ids = {chat_id, username, invite}
-    return list(filter(None, all_ids))
-
 # ---------- HANDLER ----------
 
 @client.on(events.NewMessage())
@@ -54,49 +35,48 @@ async def handler(event):
     filters = load_json(FILTER_FILE)
 
     sender = await event.get_chat()
-    source_keys = match_source(sender)
+    sender_id = str(sender.id)
+    sender_username = f"@{getattr(sender, 'username', '')}".lower() if getattr(sender, 'username', None) else ""
+    sender_invite = getattr(sender, 'invite_hash', None)
+    sender_inputs = [sender_id, sender_username, sender_invite]
 
-    # Get matched pairs for this source
-    valid_targets = []
-    for p in settings.get("pairs", []):
-        if normalize(p["source"]) in source_keys:
-            valid_targets.append(p["target"])
+    # Find matching targets for this source
+    matched_targets = []
+    for pair in settings.get("pairs", []):
+        if pair["source"] in sender_inputs:
+            matched_targets.append(pair["target"])
 
-    if not valid_targets:
-        return
+    if not matched_targets:
+        return  # no valid source → skip
 
     msg = event.message
     text = msg.message or ""
 
-    # 🛑 Block @mentions
+    # Filters
     if filters.get("block_mentions") and "@" in text:
         return
 
-    # 🧹 Apply blacklist (clean only, not skip)
     if blacklist_data.get("enabled"):
         for word in blacklist_data.get("words", []):
             text = text.replace(word, "")
 
-    # 🔁 Replace words & mentions
     for old, new in replaces.get("words", {}).items():
         text = text.replace(old, new)
     for old, new in replaces.get("mentions", {}).items():
         text = text.replace(old, new)
 
-    # 🎯 Apply media filters
-    if filters.get("only_text") and msg.media:
+    if filters.get("only_text") and not msg.media:
+        pass
+    elif filters.get("only_image") and not msg.photo:
         return
-    if filters.get("only_image") and not msg.photo:
+    elif filters.get("only_video") and not msg.video:
         return
-    if filters.get("only_video") and not msg.video:
-        return
-    if filters.get("only_link") and ("http" not in text and "www" not in text):
+    elif filters.get("only_link") and ("http" not in text and "www" not in text):
         return
 
-    # 📤 Forward to valid targets
-    for target in valid_targets:
+    for target in matched_targets:
         try:
-            await client.send_message(target, message=text, file=msg.media)
+            await client.send_message(target, file=msg.media, message=text)
             print(f"✅ Forwarded to {target}")
         except Exception as e:
             print(f"❌ Failed to forward to {target}: {e}")
