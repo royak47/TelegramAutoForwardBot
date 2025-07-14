@@ -25,12 +25,24 @@ def load_json(file):
     with open(file, "r") as f:
         return json.load(f)
 
-def match_channel(sender):
-    settings = load_json(SETTINGS_FILE)
-    sources = settings.get("source_channels", [])
+def normalize(value):
+    value = value.strip()
+    if value.startswith("https://t.me/+"):
+        return value  # full invite
+    elif value.startswith("https://t.me/"):
+        return "@" + value.split("/")[-1]
+    elif value.startswith("t.me/+"):
+        return "https://" + value
+    elif value.startswith("t.me/"):
+        return "@" + value.split("/")[-1]
+    return value
+
+def match_source(sender):
     chat_id = str(sender.id)
     username = f"@{getattr(sender, 'username', '')}".lower() if getattr(sender, 'username', None) else ""
-    return chat_id in sources or username in [s.lower() for s in sources] or sender.username in sources or sender.invite_hash in sources
+    invite = getattr(sender, 'invite_hash', None)
+    all_ids = {chat_id, username, invite}
+    return list(filter(None, all_ids))
 
 # ---------- HANDLER ----------
 
@@ -42,42 +54,49 @@ async def handler(event):
     filters = load_json(FILTER_FILE)
 
     sender = await event.get_chat()
-    if not match_channel(sender):
+    source_keys = match_source(sender)
+
+    # Get matched pairs for this source
+    valid_targets = []
+    for p in settings.get("pairs", []):
+        if normalize(p["source"]) in source_keys:
+            valid_targets.append(p["target"])
+
+    if not valid_targets:
         return
 
     msg = event.message
     text = msg.message or ""
 
-    # BLOCK @MENTIONS COMPLETELY
+    # 🛑 Block @mentions
     if filters.get("block_mentions") and "@" in text:
         return
 
-    # APPLY BLACKLIST (PARTIAL REMOVE, NOT SKIP MSG)
+    # 🧹 Apply blacklist (clean only, not skip)
     if blacklist_data.get("enabled"):
         for word in blacklist_data.get("words", []):
-            if word:
-                text = text.replace(word, "")
+            text = text.replace(word, "")
 
-    # REPLACEMENTS
+    # 🔁 Replace words & mentions
     for old, new in replaces.get("words", {}).items():
         text = text.replace(old, new)
     for old, new in replaces.get("mentions", {}).items():
         text = text.replace(old, new)
 
-    # APPLY FILTERS
-    if filters.get("only_text") and not msg.media:
-        pass
-    elif filters.get("only_image") and not msg.photo:
+    # 🎯 Apply media filters
+    if filters.get("only_text") and msg.media:
         return
-    elif filters.get("only_video") and not msg.video:
+    if filters.get("only_image") and not msg.photo:
         return
-    elif filters.get("only_link") and ("http" not in text and "www" not in text):
+    if filters.get("only_video") and not msg.video:
+        return
+    if filters.get("only_link") and ("http" not in text and "www" not in text):
         return
 
-    # FORWARD TO TARGETS
-    for target in settings.get("target_channels", []):
+    # 📤 Forward to valid targets
+    for target in valid_targets:
         try:
-            await client.send_message(target, file=msg.media, message=text)
+            await client.send_message(target, message=text, file=msg.media)
             print(f"✅ Forwarded to {target}")
         except Exception as e:
             print(f"❌ Failed to forward to {target}: {e}")
