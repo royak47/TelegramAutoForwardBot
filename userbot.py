@@ -17,104 +17,74 @@ FILTER_FILE = "filters.json"
 
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
-# ---------- UTILITIES ----------
-
 def load_json(file):
     if not os.path.exists(file):
         return {}
     with open(file, "r") as f:
         return json.load(f)
 
-def match_source_identifier(sender):
-    """
-    Return list of identifiers that could match the source:
-    - Chat ID (e.g., -100123...)
-    - @username
-    - invite link (https://t.me/+abc)
-    """
-    identifiers = []
-    if hasattr(sender, "id"):
-        identifiers.append(str(sender.id))
-    if hasattr(sender, "username") and sender.username:
-        identifiers.append("@" + sender.username.lower())
-    if hasattr(sender, "invite") and sender.invite and hasattr(sender.invite, "link"):
-        identifiers.append(sender.invite.link)
-    return identifiers
-
-def normalize(source):
-    source = source.strip()
-    if source.startswith("https://t.me/+"):
-        return source
-    elif source.startswith("https://t.me/"):
-        return "@" + source.split("/")[-1]
-    elif source.startswith("t.me/+"):
-        return "https://" + source
-    elif source.startswith("t.me/"):
-        return "@" + source.split("/")[-1]
-    return source
-
-# ---------- MAIN FORWARD HANDLER ----------
+def normalize_sender(sender):
+    if getattr(sender, "username", None):
+        return f"@{sender.username.lower()}"
+    if str(sender.id).startswith("-100"):
+        return str(sender.id)
+    if getattr(sender, "invite_hash", None):
+        return f"https://t.me/+{sender.invite_hash}"
+    return str(sender.id)
 
 @client.on(events.NewMessage())
-async def forward_handler(event):
+async def handler(event):
     settings = load_json(SETTINGS_FILE)
     replaces = load_json(REPLACE_FILE)
     blacklist_data = load_json(BLACKLIST_FILE)
     filters = load_json(FILTER_FILE)
 
     pairs = settings.get("pairs", [])
-    if not pairs:
-        return
 
     sender = await event.get_chat()
-    identifiers = match_source_identifier(sender)
+    source_key = normalize_sender(sender)
 
-    # Match source
-    matched_targets = []
-    for pair in pairs:
-        source = normalize(pair.get("source", ""))
-        if source in identifiers:
-            matched_targets.append(pair.get("target"))
-
+    # Match pairs
+    matched_targets = [pair["target"] for pair in pairs if pair["source"].lower() == source_key.lower()]
     if not matched_targets:
-        return  # No match
+        return
 
     msg = event.message
     text = msg.message or ""
 
-    # Apply filters
-    if filters.get("only_text") and not msg.media:
-        pass
-    elif filters.get("only_image") and not msg.photo:
-        return
-    elif filters.get("only_video") and not msg.video:
-        return
-    elif filters.get("only_link") and ("http" not in text and "www" not in text):
-        return
-    elif filters.get("block_mentions") and "@" in text:
+    # Block mentions
+    if filters.get("block_mentions") and "@" in text:
         return
 
-    # Apply blacklist
+    # Apply blacklist (remove words)
     if blacklist_data.get("enabled"):
         for word in blacklist_data.get("words", []):
-            if word:
-                text = text.replace(word, "")
+            text = text.replace(word, "")
 
-    # Apply replacements
+    # Word and mention replacements
     for old, new in replaces.get("words", {}).items():
         text = text.replace(old, new)
     for old, new in replaces.get("mentions", {}).items():
         text = text.replace(old, new)
 
-    # Send to matched target(s)
+    # Filters
+    if filters.get("only_text") and msg.media:
+        return
+    if filters.get("only_image") and not msg.photo:
+        return
+    if filters.get("only_video") and not msg.video:
+        return
+    if filters.get("only_link") and ("http" not in text and "www" not in text):
+        return
+
+    # Forward only to matched target(s)
     for target in matched_targets:
         try:
-            await client.send_message(target, file=msg.media, message=text)
+            await client.send_message(target, message=text, file=msg.media)
             print(f"✅ Forwarded to {target}")
         except Exception as e:
             print(f"❌ Failed to forward to {target}: {e}")
 
-# ---------- START ----------
 print("🚀 Userbot started.")
 client.start()
 client.run_until_disconnected()
