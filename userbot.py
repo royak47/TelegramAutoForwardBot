@@ -24,13 +24,13 @@ def load_json(file):
         return json.load(f)
 
 def normalize_sender(sender):
-    if getattr(sender, "username", None):
-        return f"@{sender.username.lower()}"
-    if str(sender.id).startswith("-100"):
+    if sender.username:
+        return f"@{sender.username}".lower()
+    if hasattr(sender, "id"):
         return str(sender.id)
-    if getattr(sender, "invite_hash", None):
+    if hasattr(sender, "invite_hash"):
         return f"https://t.me/+{sender.invite_hash}"
-    return str(sender.id)
+    return ""
 
 @client.on(events.NewMessage())
 async def handler(event):
@@ -39,29 +39,33 @@ async def handler(event):
     blacklist_data = load_json(BLACKLIST_FILE)
     filters = load_json(FILTER_FILE)
 
-    pairs = settings.get("pairs", [])
-
     sender = await event.get_chat()
-    source_key = normalize_sender(sender)
+    sender_id = normalize_sender(sender)
 
-    # Match pairs
-    matched_targets = [pair["target"] for pair in pairs if pair["source"].lower() == source_key.lower()]
+    # Find targets only for matching source
+    matched_targets = []
+    for pair in settings.get("pairs", []):
+        source = pair.get("source", "").strip().lower()
+        if source == sender_id:
+            matched_targets.append(pair.get("target"))
+
     if not matched_targets:
-        return
+        return  # No matching source → skip
 
     msg = event.message
     text = msg.message or ""
 
-    # Block mentions
+    # @block mentions
     if filters.get("block_mentions") and "@" in text:
         return
 
-    # Apply blacklist (remove words)
+    # Apply blacklist (partial block)
     if blacklist_data.get("enabled"):
         for word in blacklist_data.get("words", []):
-            text = text.replace(word, "")
+            if word:
+                text = text.replace(word, "")
 
-    # Word and mention replacements
+    # Replacements
     for old, new in replaces.get("words", {}).items():
         text = text.replace(old, new)
     for old, new in replaces.get("mentions", {}).items():
@@ -77,10 +81,10 @@ async def handler(event):
     if filters.get("only_link") and ("http" not in text and "www" not in text):
         return
 
-    # Forward only to matched target(s)
+    # Forward to matched targets
     for target in matched_targets:
         try:
-            await client.send_message(target, message=text, file=msg.media)
+            await client.send_message(target, file=msg.media, message=text)
             print(f"✅ Forwarded to {target}")
         except Exception as e:
             print(f"❌ Failed to forward to {target}: {e}")
